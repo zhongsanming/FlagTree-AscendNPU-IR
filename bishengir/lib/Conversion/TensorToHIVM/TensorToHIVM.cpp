@@ -43,6 +43,9 @@ struct TensorToHIVMConcatOp : public OpRewritePattern<tensor::ConcatOp> {
 
   LogicalResult matchAndRewrite(tensor::ConcatOp concatOp,
                                 PatternRewriter &rewriter) const override {
+    SmallVector<annotation::MarkOp> markOpsToClean;
+    auto index = traceInsertSliceSourceIndex(concatOp, markOpsToClean);
+
     SmallVector<OpFoldResult> outputSizes;
     ReifiedRankedShapedTypeDims reifiedReturnShapes;
     if (failed(concatOp.reifyResultShapes(rewriter, reifiedReturnShapes))) {
@@ -55,34 +58,52 @@ struct TensorToHIVMConcatOp : public OpRewritePattern<tensor::ConcatOp> {
     auto newConcatOp = rewriter.replaceOpWithNewOp<hivm::VConcatOp>(
         concatOp, concatOp.getResult().getType(), concatOp.getDim(),
         concatOp.getInputs(), emptyDest);
-    auto index = traceInsertSliceSourceIndex(concatOp, rewriter);
     if (index.has_value()) {
       newConcatOp->setAttr(hivm::InsertSliceSourceIndexAttr::name,
                            rewriter.getI64IntegerAttr(index.value()));
+    }
+    for (annotation::MarkOp markOp : markOpsToClean) {
+      removeMarkOpAttr(markOp, hfusion::InsertSliceSourceIndexAttr::name,
+                       rewriter);
     }
     return success();
   }
 
   std::optional<int64_t>
-  traceInsertSliceSourceIndex(Operation *op, PatternRewriter &rewriter) const {
+  traceInsertSliceSourceIndex(Operation *op,
+                              SmallVectorImpl<annotation::MarkOp> &markOpsToClean) const {
     auto markOp = dyn_cast<annotation::MarkOp>(op);
     if (markOp) {
       IntegerAttr attr = markOp->getAttrOfType<IntegerAttr>(
           hfusion::InsertSliceSourceIndexAttr::name);
       if (attr) {
-        int64_t result = attr.getInt();
-        rewriter.eraseOp(markOp);
-        return result;
+        markOpsToClean.push_back(markOp);
+        return attr.getInt();
       }
     }
 
     for (Operation *user : op->getUsers()) {
-      auto tracedIndex = traceInsertSliceSourceIndex(user, rewriter);
+      auto tracedIndex = traceInsertSliceSourceIndex(user, markOpsToClean);
       if (tracedIndex.has_value()) {
         return tracedIndex;
       }
     }
     return std::nullopt;
+  }
+};
+
+struct CleanupInsertSliceSourceIndexMarkOp
+    : public OpRewritePattern<annotation::MarkOp> {
+  using OpRewritePattern<annotation::MarkOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(annotation::MarkOp markOp,
+                                PatternRewriter &rewriter) const override {
+    if (!markOp->hasAttr(hfusion::InsertSliceSourceIndexAttr::name)) {
+      return failure();
+    }
+    removeMarkOpAttr(markOp, hfusion::InsertSliceSourceIndexAttr::name,
+                     rewriter);
+    return success();
   }
 };
 
@@ -164,11 +185,15 @@ void TensorToHIVMConversionPass::runOnOperation() {
   auto module = getOperation();
   ConversionTarget target(getContext());
   RewritePatternSet patterns(&getContext());
-  target.addLegalDialect<hivm::HIVMDialect, func::FuncDialect,
-                         tensor::TensorDialect, arith::ArithDialect,
-                         affine::AffineDialect>();
+  target.addLegalDialect<annotation::AnnotationDialect, hivm::HIVMDialect,
+                         func::FuncDialect, tensor::TensorDialect,
+                         arith::ArithDialect, affine::AffineDialect>();
   target.addIllegalOp<tensor::ConcatOp, tensor::PadOp>();
+  target.addDynamicallyLegalOp<annotation::MarkOp>([](annotation::MarkOp markOp) {
+    return !markOp->hasAttr(hfusion::InsertSliceSourceIndexAttr::name);
+  });
   populateTensorToHIVMConversionPatterns(patterns);
+  patterns.add<CleanupInsertSliceSourceIndexMarkOp>(patterns.getContext());
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();
   }
