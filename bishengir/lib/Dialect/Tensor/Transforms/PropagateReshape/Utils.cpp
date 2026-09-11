@@ -409,9 +409,14 @@ createMemrefExpand(PatternRewriter &rewriter, Location loc, Value src,
                    ArrayRef<ReassociationIndices> reassociation,
                    const SmallVector<OpFoldResult> &newOutputShape) {
   auto staticOutputShape = decomposeMixedValues(newOutputShape).first;
-  auto expandResType =
-      MemRefType::get(staticOutputShape, getElementTypeOrSelf(src.getType()));
-  return rewriter.create<memref::ExpandShapeOp>(loc, expandResType, src,
+  // Preserve the source's memory space and layout. Building the type with a
+  // bare MemRefType::get silently drops the address space (e.g. ub), which
+  // later makes the derived memref.collapse_shape fail verification.
+  auto expandResType = memref::ExpandShapeOp::computeExpandedType(
+      cast<MemRefType>(src.getType()), staticOutputShape, reassociation);
+  if (failed(expandResType))
+    return nullptr;
+  return rewriter.create<memref::ExpandShapeOp>(loc, *expandResType, src,
                                                 reassociation, newOutputShape);
 }
 

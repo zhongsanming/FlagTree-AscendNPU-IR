@@ -1089,6 +1089,8 @@ LogicalResult handleBufferizationToTensor(tensor::ExpandShapeOp expandOp,
   auto newExpandMemref =
       createMemrefExpand(rewriter, toTensorOp.getLoc(), memrefSrc,
                          reassociation, expandOutputShape);
+  if (!newExpandMemref)
+    return failure();
   rewriter.modifyOpInPlace(toTensorOp, [&]() {
     toTensorOp.setOperand(newExpandMemref.getResult());
     toTensorOp.getResult().setType(expandOp.getType());
