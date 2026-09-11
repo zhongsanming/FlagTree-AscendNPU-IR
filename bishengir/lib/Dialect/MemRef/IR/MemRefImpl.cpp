@@ -19,6 +19,7 @@
 #if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
 #include "mlir/Dialect/Utils/ExpandShapeUtils.h"
 #endif
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/TypeUtilities.h"
 
 namespace {
@@ -81,14 +82,22 @@ struct FoldRedundantCopy : public OpRewritePattern<memref::CopyOp> {
     }
 
     memref::CopyOp copyFromDst = copyMaybe.value();
+    // This fold is a local peephole: it reorders the two copies and the
+    // reshape chain between them, so all of them must live in copyOp's block.
+    // isBeforeInBlock() asserts if the other op is in a different block, and
+    // moving the value across regions would be invalid anyway.
+    Block *block = copyOp->getBlock();
+    if (copyFromDst->getBlock() != block)
+      return rewriter.notifyMatchFailure(
+          copyOp, "folded copy lives in a different block");
     if (!copyOp->isBeforeInBlock(copyFromDst)) {
       // avoid fold `copy B C; copy A B` to `copy A C`, wrong order
       return failure();
     }
 
     DenseSet<Operation *> skipCopyOps{copyOp, copyFromDst};
-    if (!isUsersMemoryEffectFree(src, skipCopyOps) ||
-        !isUsersMemoryEffectFree(copyFromDst.getTarget(), skipCopyOps)) {
+    if (!isUsersMemoryEffectFree(src, skipCopyOps, block) ||
+        !isUsersMemoryEffectFree(copyFromDst.getTarget(), skipCopyOps, block)) {
       // 1. avoid fold `copy A B; memory_effect(A); copy B C` to `copy A C`
       // 2. avoid fold `copy A B; memory_effect(C); copy B C` to `copy A C`
       return failure();
@@ -104,9 +113,22 @@ struct FoldRedundantCopy : public OpRewritePattern<memref::CopyOp> {
         continue;
       }
       if (auto expand = dyn_cast<memref::ExpandShapeOp>(op)) {
+        // Re-derive the expanded type from the new source. Its layout and
+        // memory space can differ from the original source (e.g. a strided
+        // iter_arg instead of an identity alloc); reusing
+        // expand.getResultType() keeps the old layout and produces a
+        // memref.expand_shape that fails verification.
+        auto expandedType = memref::ExpandShapeOp::computeExpandedType(
+            cast<MemRefType>(reshapeFromSrc.getType()),
+            expand.getStaticOutputShape(), expand.getReassociationIndices());
+        if (failed(expandedType))
+          return rewriter.notifyMatchFailure(
+              copyOp, "cannot re-derive expanded type for the new source");
         reshapeFromSrc = rewriter.create<memref::ExpandShapeOp>(
-            loc, expand.getResultType(), reshapeFromSrc,
-            expand.getReassociationIndices());
+            loc, *expandedType, reshapeFromSrc,
+            expand.getReassociationIndices(),
+            getMixedValues(expand.getStaticOutputShape(),
+                           expand.getOutputShape(), rewriter));
         continue;
       }
       llvm::report_fatal_error("invalid reshape op");
@@ -122,13 +144,18 @@ struct FoldRedundantCopy : public OpRewritePattern<memref::CopyOp> {
   }
 
   bool isUsersMemoryEffectFree(Value src,
-                               const DenseSet<Operation *> &skipCopyOps) const {
+                               const DenseSet<Operation *> &skipCopyOps,
+                               Block *block) const {
     return llvm::all_of(src.getUsers(), [&](Operation *user) {
       if (skipCopyOps.contains(user)) {
         return true;
       }
       if (isMemoryEffectFree(user)) {
         return true;
+      }
+      // Relative ordering (and hence the fold) is only defined within a block.
+      if (user->getBlock() != block) {
+        return false;
       }
       // make sure all op with memory effect exist before or after skipCopyOps
       bool userBeforeAll = llvm::all_of(skipCopyOps, [&](Operation *skipOp) {
