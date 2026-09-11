@@ -19,6 +19,7 @@
 #if (!BISHENGIR_BUILD_STANDALONE_IR_ONLY)
 #include "mlir/Dialect/Utils/ExpandShapeUtils.h"
 #endif
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/TypeUtilities.h"
 
 namespace {
@@ -104,9 +105,22 @@ struct FoldRedundantCopy : public OpRewritePattern<memref::CopyOp> {
         continue;
       }
       if (auto expand = dyn_cast<memref::ExpandShapeOp>(op)) {
+        // Re-derive the expanded type from the new source. Its layout and
+        // memory space can differ from the original source (e.g. a strided
+        // iter_arg instead of an identity alloc); reusing
+        // expand.getResultType() keeps the old layout and produces a
+        // memref.expand_shape that fails verification.
+        auto expandedType = memref::ExpandShapeOp::computeExpandedType(
+            cast<MemRefType>(reshapeFromSrc.getType()),
+            expand.getStaticOutputShape(), expand.getReassociationIndices());
+        if (failed(expandedType))
+          return rewriter.notifyMatchFailure(
+              copyOp, "cannot re-derive expanded type for the new source");
         reshapeFromSrc = rewriter.create<memref::ExpandShapeOp>(
-            loc, expand.getResultType(), reshapeFromSrc,
-            expand.getReassociationIndices());
+            loc, *expandedType, reshapeFromSrc,
+            expand.getReassociationIndices(),
+            getMixedValues(expand.getStaticOutputShape(),
+                           expand.getOutputShape(), rewriter));
         continue;
       }
       llvm::report_fatal_error("invalid reshape op");
