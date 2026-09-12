@@ -272,6 +272,9 @@ public:
 
   void build();
 
+  /// TEMP DIAGNOSTIC (do not merge): set `buffer`'s status and record the site.
+  void SetBufferStatus(Value buffer, BufferStatus status, Operation *op);
+
   /// linear operation info.
   SmallVector<std::unique_ptr<OpInfo>> linearOperation;
 
@@ -484,6 +487,12 @@ private:
 
   /// Gen-kill status corresponding to buffer.
   DenseMap<Value, BufferStatus> buffer2status;
+
+  /// TEMP DIAGNOSTIC (do not merge): ordered status transitions per buffer, so
+  /// that a "KILLED buffer re-used" failure can print where each transition
+  /// happened.
+  DenseMap<Value, SmallVector<std::pair<Operation *, BufferStatus>>>
+      buffer2History;
 
   /// map on buffer alias, and whether the alias buffer is conditional.
   llvm::MapVector<Value, SmallVector<BufferCondPair>> buffer2AliasVec;
