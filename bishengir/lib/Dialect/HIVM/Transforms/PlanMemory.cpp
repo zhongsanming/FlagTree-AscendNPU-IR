@@ -882,24 +882,12 @@ void MemLivenessAnalysis::OpKillHandle(OpInfo *opInfo, Liveness live,
 
 void MemLivenessAnalysis::UpdateOpKillInfo(OpInfo *opInfo, Value operand,
                                            Liveness live) {
-  // A conditional alias (recorded with `cond == true`) only means the two
-  // buffers may be the same under some predicate (via scf.if results,
-  // scf.for iter_args, arith.select, ...). Releasing one must therefore not
-  // release the rest of that alias family: the other buffer can still be live
-  // on the path that does not take the condition, and a later use of it would
-  // otherwise be reported as "released buffer used again".
-  SmallVector<Value> killCandidates;
-  killCandidates.push_back(operand);
-  for (auto &aliasPair : GetAliasBufferCondPairs(operand))
-    if (!aliasPair.second)
-      killCandidates.push_back(aliasPair.first);
-
   auto aliasBuffers = GetAliasBuffers(operand);
   aliasBuffers.insert(operand);
-  for (Value aliasBuffer : killCandidates) {
+  for (Value aliasBuffer : aliasBuffers) {
     auto iterBuffer = buffer2status.find(aliasBuffer);
     if (iterBuffer == buffer2status.end())
-      continue;
+      return;
     if (iterBuffer->second == BufferStatus::GENED &&
         isParentOpDominate(iterBuffer->first.getDefiningOp(),
                            opInfo->operation) &&
