@@ -51,7 +51,16 @@ LogicalResult handleAllocOp(memref::ExpandShapeOp expandOp,
   rewriter.replaceAllUsesExcept(definingOp->getResults()[0],
                                 collapsedRes.getResult(), collapsedRes);
   rewriter.modifyOpInPlace(definingOp, [&]() {
-    definingOp->getResult(0).setType(expandOp.getResultType());
+    // Preserve the allocation's memory space and layout. expandOp.getResultType()
+    // may have been materialised with the default address space (e.g. a
+    // bufferization-introduced expand of a UB buffer); using it verbatim would
+    // make collapsedRes above change address space, which memref.collapse_shape
+    // forbids ("expected collapsed type ... but found ...#hivm.address_space<ub>").
+    auto allocTy = cast<MemRefType>(definingOp->getResult(0).getType());
+    auto expandedTy = cast<MemRefType>(expandOp.getResultType());
+    definingOp->getResult(0).setType(
+        MemRefType::get(expandedTy.getShape(), allocTy.getElementType(),
+                        allocTy.getLayout(), allocTy.getMemorySpace()));
   });
   rewriter.replaceAllUsesWith(expandOp.getResult(), allocOp);
   return success();
