@@ -322,6 +322,16 @@ def FixpipeOp : HIVM_DmaOp<"fixpipe", [
                     CArg<"FixpipePreQuantModeAttr", "nullptr">:$pre_quant,
                     CArg<"FixpipePreReluModeAttr", "nullptr">:$pre_relu, CArg<"BoolAttr", "nullptr">:$channel_split,
                     CArg<"Value", "nullptr">:$quant_scale)
+    >,
+    // Backward-compatible builder for callers that pass unit_flag_cond and
+    // unit_flag_mode but predate the quant_scale operand.
+    OpBuilder<(ins "TypeRange":$result, "Value":$src, "Value":$dst,
+                    "ValueRange":$unit_flag_cond,
+                    "FixpipeDMAModeAttr":$dma_mode,
+                    "FixpipeDualDstModeAttr":$dual_dst_mode,
+                    "FixpipePreQuantModeAttr":$pre_quant,
+                    "FixpipePreReluModeAttr":$pre_relu, "BoolAttr":$channel_split,
+                    "ArrayAttr":$unit_flag_mode)
     >
   ];
 

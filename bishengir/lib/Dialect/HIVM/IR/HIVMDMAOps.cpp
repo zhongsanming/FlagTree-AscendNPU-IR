@@ -674,6 +674,18 @@ void FixpipeOp::build(OpBuilder &odsBuilder, OperationState &odsState,
         /*unit_flag_mode=*/ ArrayAttr{}, quant_scale);
 }
 
+void FixpipeOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                      TypeRange result, Value src, Value dst,
+                      ValueRange unit_flag_cond, FixpipeDMAModeAttr dma_mode,
+                      FixpipeDualDstModeAttr dual_mode,
+                      FixpipePreQuantModeAttr pre_quant,
+                      FixpipePreReluModeAttr pre_relu, BoolAttr channel_split,
+                      ArrayAttr unit_flag_mode) {
+  build(odsBuilder, odsState, result, src, dst, unit_flag_cond, dma_mode,
+        dual_mode, pre_quant, pre_relu, channel_split, unit_flag_mode,
+        /*quant_scale=*/ Value{});
+}
+
 enum FixpipeState {
   Init = -1,
   QuantOrActivation = 0,
