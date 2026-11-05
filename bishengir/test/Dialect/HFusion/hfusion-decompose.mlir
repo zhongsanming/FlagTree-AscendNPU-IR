@@ -444,3 +444,42 @@ func.func @test_linalg_decompose_transpose_membase(
   %t0 = linalg.transpose ins(%arg0 : tensor<16x1x15x17xf16>) outs(%0 : tensor<15x16x1x17xf16>) permutation = [2, 0, 1, 3]
   return %t0 : tensor<15x16x1x17xf16>
 }
+
+// -----
+
+// FP4 elements are packed two per byte, so a logical K of 64 is stored as a
+// K of 32. This must not be mistaken for the K = 32 software-emulation case:
+// the matmul stays in hfusion.matmul_mx so it can lower to native MmadMx.
+// CHECK-LABEL: func.func @test_matmul_mx_fp4_logical_k64
+// CHECK: hfusion.matmul_mx {lhsFormat = 3 : i32, rhsFormat = 3 : i32}
+// CHECK-NOT: linalg.matmul
+func.func @test_matmul_mx_fp4_logical_k64(
+    %a: tensor<32x32xi8>, %b: tensor<32x32xi8>,
+    %scaleA: tensor<32x2xi8>, %scaleB: tensor<32x2xi8>,
+    %acc: tensor<32x32xf32>) -> tensor<32x32xf32> {
+  %res = hfusion.matmul_mx {lhsFormat = 3 : i32, rhsFormat = 3 : i32}
+      ins(%a, %b, %scaleA, %scaleB :
+          tensor<32x32xi8>, tensor<32x32xi8>,
+          tensor<32x2xi8>, tensor<32x2xi8>)
+      outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  return %res : tensor<32x32xf32>
+}
+
+// -----
+
+// Non-FP4 matmuls with K = 32 are still decomposed into the software
+// emulation.
+// CHECK-LABEL: func.func @test_matmul_mx_fp8_k32
+// CHECK-NOT: hfusion.matmul_mx
+// CHECK: linalg.matmul
+func.func @test_matmul_mx_fp8_k32(
+    %a: tensor<32x32xf8E5M2>, %b: tensor<32x32xf8E5M2>,
+    %scaleA: tensor<32x1xi8>, %scaleB: tensor<32x1xi8>,
+    %acc: tensor<32x32xf32>) -> tensor<32x32xf32> {
+  %res = hfusion.matmul_mx {lhsFormat = 1 : i32, rhsFormat = 1 : i32}
+      ins(%a, %b, %scaleA, %scaleB :
+          tensor<32x32xf8E5M2>, tensor<32x32xf8E5M2>,
+          tensor<32x1xi8>, tensor<32x1xi8>)
+      outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  return %res : tensor<32x32xf32>
+}

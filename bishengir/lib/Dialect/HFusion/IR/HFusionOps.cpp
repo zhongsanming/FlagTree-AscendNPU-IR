@@ -3653,6 +3653,18 @@ MatMulMxOp::decomposeOperation(PatternRewriter &builder) {
   Value a = getInputA();
   auto aType = cast<RankedTensorType>(a.getType());
 
+  // The software emulation below does not unpack FP4 operands. FP4 elements
+  // are stored two per byte, so an FP4 matmul with logical K = 64 has a stored
+  // K of 32 and would otherwise be mistaken for the K = 32 emulation case.
+  // Keep FP4 on the native MmadMx path.
+  auto lhsFormat = getLhsFormat();
+  auto rhsFormat = getRhsFormat();
+  const bool isFp4 =
+      (lhsFormat && *lhsFormat == Dataformat::FP4E2M1_T) ||
+      (rhsFormat && *rhsFormat == Dataformat::FP4E2M1_T);
+  if (isFp4)
+    return failure();
+
   // Software emulation only used to support K = 32
   const auto K = aType.getShape()[1];
   if (K != 32)
